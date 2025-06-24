@@ -1,7 +1,3 @@
-Claro. Aqui está a documentação formatada como um `README.md` padrão para o GitHub, com sintaxe Markdown, blocos de código e uma estrutura clara para desenvolvedores.
-
------
-
 # **Sistema RAG com LLM Local**
 
 Um sistema completo de **Geração Aumentada por Recuperação (RAG - Retrieval-Augmented Generation)** que opera de forma totalmente local. A aplicação permite fazer perguntas em linguagem natural e receber respostas baseadas em um conjunto de documentos privados, garantindo privacidade e controle total dos dados.
