@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import threading
-import fitz  # PyMuPDF
+import fitz # PyMuPDF
 from docx2python import docx2python
 from PIL import Image
 import pytesseract
@@ -22,6 +22,7 @@ import sys
 import subprocess
 import atexit
 import torch
+import openpyxl
 
 # ==============================================================================
 # --- SEÇÃO: CONFIGURAÇÃO DE LOGGING ---
@@ -47,17 +48,17 @@ UPLOAD_FOLDER = 'uploads'
 DOCUMENTS_DIR = os.getenv("DOCUMENTS_DIR", "C:\\Documentos")
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "chroma_db")
 CHROMA_COLLECTION_NAME = "document_chunks"
-DB_PATH = "audit.db"  # Banco de dados SQLite para auditoria
+DB_PATH = "audit.db" # Banco de dados SQLite para auditoria
 TESSERACT_CMD_PATH = os.getenv("TESSERACT_CMD_PATH", r"C:\Users\bruno.guimaraes\AppData\Local\Programs\Tesseract-OCR\tesseract.exe")
 
 # ==============================================================================
 # --- SEÇÃO: PARÂMETROS DO SERVIDOR LLAMA ---
 # ==============================================================================
-LLAMA_MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", r"C:\Administrative\amoral-gemma3-4B-v2-qat.Q4_K_S.gguf")
+LLAMA_MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", r"C:\LLM\amoral-gemma3-4B-v2-qat.Q4_K_S.gguf")
 LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://localhost:8080/completion")
 LLAMA_HOST = "127.0.0.1"
 LLAMA_PORT = 8080
-LLAMA_NGL = -1  # Número de camadas para descarregar na GPU (-1 para GPU se disponível, 0 para CPU)
+LLAMA_NGL = -1 # Número de camadas para descarregar na GPU (-1 para GPU se disponível, 0 para CPU)
 LLAMA_THREADS = 10
 LLAMA_THREADS_BATCH = 10
 LLAMA_BATCH_SIZE = 512
@@ -66,24 +67,24 @@ LLAMA_TEMP = 0.7
 LLAMA_TOP_K = 40
 LLAMA_TOP_P = 0.95
 LLAMA_REPEAT_PENALTY = 1.1
-llama_server_process = None  # Variável global para o processo do servidor Llama
+llama_server_process = None # Variável global para o processo do servidor Llama
 
 # ==============================================================================
 # --- SEÇÃO: PARÂMETROS DE EMBEDDING E INDEXAÇÃO ---
 # ==============================================================================
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Modelo de embedding da Sentence Transformers
-CHUNK_SIZE = 500  # Tamanho dos chunks de texto
-CHUNK_OVERLAP = 50  # Sobreposição entre chunks
-TOP_K = 3  # Número de chunks mais relevantes a serem recuperados
-MAX_WORKERS = os.cpu_count() or 4  # Número de workers para processamento paralelo
-SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.jpg', '.jpeg', '.png'}
+EMBEDDING_MODEL = "all-MiniLM-L6-v2" # Modelo de embedding da Sentence Transformers
+CHUNK_SIZE = 500 # Tamanho dos chunks de texto
+CHUNK_OVERLAP = 50 # Sobreposição entre chunks
+TOP_K = 3 # Número de chunks mais relevantes a serem recuperados
+MAX_WORKERS = os.cpu_count() or 4 # Número de workers para processamento paralelo
+SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.jpg', '.jpeg', '.png', '.xlsx'} # Adicionado '.xlsx'
 
 # ==============================================================================
 # --- SEÇÃO: INICIALIZAÇÃO DE APLICAÇÃO E MODELOS ---
 # ==============================================================================
 app = Flask(__name__, static_folder="static")
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-CORS(app)  # Habilita CORS para a aplicação Flask
+CORS(app) # Habilita CORS para a aplicação Flask
 
 # Define o dispositivo para o modelo de embedding (GPU se disponível, senão CPU)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -273,7 +274,7 @@ def thresholding(image: np.ndarray) -> np.ndarray:
     return cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
 def extrair_texto(path: Path) -> str:
-    """Extrai texto de diferentes tipos de arquivo (PDF, DOCX, TXT, Imagens)."""
+    """Extrai texto de diferentes tipos de arquivo (PDF, DOCX, TXT, Imagens, XLSX)."""
     texto_completo = ""
     try:
         suffix = path.suffix.lower() # Obtém a extensão do arquivo em minúsculas
@@ -329,6 +330,24 @@ def extrair_texto(path: Path) -> str:
             texto_completo = pytesseract.image_to_string(Image.fromarray(img_processed), lang='por+eng') # OCR
             if not texto_completo.strip():
                 logger.warning(f"Nenhum texto extraído (OCR) da imagem '{path.name}'.")
+        elif suffix == ".xlsx": # NOVO: Suporte a XLSX
+            logger.info(f"Extraindo texto do arquivo Excel: '{path.name}'")
+            try:
+                workbook = openpyxl.load_workbook(path, data_only=True) # data_only=True para obter valores, não fórmulas
+                for sheet_name in workbook.sheetnames:
+                    sheet = workbook[sheet_name]
+                    texto_completo += f"\n--- Planilha: {sheet_name} ---\n"
+                    for row in sheet.iter_rows():
+                        row_values = []
+                        for cell in row:
+                            if cell.value is not None:
+                                row_values.append(str(cell.value).strip())
+                        if row_values:
+                            texto_completo += " ".join(row_values) + "\n"
+                logger.info(f"Texto extraído de '{path.name}' (XLSX).")
+            except Exception as e:
+                logger.error(f"Erro ao ler arquivo XLSX '{path.name}': {e}", exc_info=True)
+                return "" # Retorna vazio em caso de erro na leitura do XLSX
 
     except Exception as e:
         logger.error(f"Falha ao extrair texto de {path.name}: {e}", exc_info=True) # Loga a exceção com traceback
@@ -710,4 +729,3 @@ if __name__ == "__main__":
         logger.info(f"Para reindexar todos os documentos, execute: python {Path(__file__).name} indexar")
         # Executa a aplicação Flask (debug=False para produção/uso normal)
         app.run(host='0.0.0.0', port=5000, debug=False)
-
